@@ -23,15 +23,16 @@ collection = chroma_client.get_or_create_collection(
 client = OpenAI(api_key=openai_key)
 
 # resp = client.chat.completions.create(
-#     model="gpt-4o",
+#     model="gpt-3.5-turbo",
 #     messages=[
 #         {"role": "system", "content": "You are a helpful assistant."},
-#         {"role": "user", "content": "what is the meaning of life?"}
+#         {
+#             "role": "user",
+#             "content": "What is human life expectancy in the United States?",
+#         },
 #     ],
-#     max_tokens=50
 # )
 
-# print(resp.choices[0].message.content)  
 
 # Function to load documents from a directory
 def load_documents_from_directory(directory_path):
@@ -44,6 +45,7 @@ def load_documents_from_directory(directory_path):
             ) as file:
                 documents.append({"id": filename, "text": file.read()})
     return documents
+
 
 # Function to split text into chunks
 def split_text(text, chunk_size=1000, chunk_overlap=20):
@@ -59,8 +61,8 @@ def split_text(text, chunk_size=1000, chunk_overlap=20):
 # Load documents from the directory
 directory_path = "./news_articles"
 documents = load_documents_from_directory(directory_path)
-print(f"Loaded {len(documents)} documents")
 
+print(f"Loaded {len(documents)} documents")
 # Split documents into chunks
 chunked_documents = []
 for doc in documents:
@@ -69,4 +71,79 @@ for doc in documents:
     for i, chunk in enumerate(chunks):
         chunked_documents.append({"id": f"{doc['id']}_chunk{i+1}", "text": chunk})
 
-print(f"Split documents into {len(chunked_documents)} chunks")
+# print(f"Split documents into {len(chunked_documents)} chunks")
+
+
+# Function to generate embeddings using OpenAI API
+def get_openai_embedding(text):
+    response = client.embeddings.create(input=text, model="text-embedding-3-small")
+    embedding = response.data[0].embedding
+    print("==== Generating embeddings... ====")
+    return embedding
+
+
+# Generate embeddings for the document chunks
+for doc in chunked_documents[:20]:
+    print("==== Generating embeddings... ====")
+    doc["embedding"] = get_openai_embedding(doc["text"])
+
+# print(doc["embedding"])
+
+# Upsert documents with embeddings into Chroma
+for doc in chunked_documents[:20]:
+    print("==== Inserting chunks into db;;; ====")
+    collection.upsert(
+        ids=[doc["id"]], documents=[doc["text"]], embeddings=[doc["embedding"]]
+    )
+
+
+# Function to query documents
+def query_documents(question, n_results=2):
+    # query_embedding = get_openai_embedding(question)
+    results = collection.query(query_texts=question, n_results=n_results)
+    print(results)
+    # Extract the relevant chunks
+    relevant_chunks = [doc for sublist in results["documents"] for doc in sublist]
+    print("==== Returning relevant chunks ====")
+    return relevant_chunks
+    # for idx, document in enumerate(results["documents"][0]):
+    #     doc_id = results["ids"][0][idx]
+    #     distance = results["distances"][0][idx]
+    #     print(f"Found document chunk: {document} (ID: {doc_id}, Distance: {distance})")
+
+
+# Function to generate a response from OpenAI
+def generate_response(question, relevant_chunks):
+    context = "\n\n".join(relevant_chunks)
+    prompt = (
+        "You are an assistant for question-answering tasks. Use the following pieces of "
+        "retrieved context to answer the question. If you don't know the answer, say that you "
+        "don't know. Use three sentences maximum and keep the answer concise."
+        "\n\nContext:\n" + context + "\n\nQuestion:\n" + question
+    )
+
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "system",
+                "content": prompt,
+            },
+            {
+                "role": "user",
+                "content": question,
+            },
+        ],
+    )
+
+    answer = response.choices[0].message
+    return answer
+
+
+# Example query
+# query_documents("tell me about AI replacing TV writers strike.")
+# Example query and response generation
+question = "tell me about databricks"
+relevant_chunks = query_documents(question)
+# answer = generate_response(question, relevant_chunks)
+
